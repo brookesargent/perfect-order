@@ -91,6 +91,14 @@ export async function initDb() {
     // Workflows bulk-ingest pipeline (workflows/) as a stable external id.
     await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS osm_id TEXT;`);
     await pool.query(USERS_SCHEMA);
+    // Phase 2: turn saved_orders into a per-user log. Idempotent column adds,
+    // same boot contract. user_id is nullable: pre-Phase-2 global rows stay but
+    // become orphaned (invisible under per-user scoping) — we don't backfill.
+    // status drives the suggested→ordered lifecycle; rating is gated to 'ordered'.
+    await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id);`);
+    await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'suggested';`);
+    await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS ordered_at TIMESTAMPTZ;`);
+    await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS notes TEXT;`);
     ready = true;
     console.log('[db] connected; schema ready.');
     return true;
@@ -103,40 +111,100 @@ export async function initDb() {
   }
 }
 
-export async function saveOrder(restaurant, order) {
+// The columns every order read returns — the frontend's row contract.
+const ORDER_COLS = 'id, restaurant, order_data, status, ordered_at, notes, rating, created_at';
+
+// Save a generated order as a suggestion for this user (status 'suggested').
+export async function saveOrder(userId, restaurant, order) {
   const { rows } = await pool.query(
-    `INSERT INTO saved_orders (restaurant, order_data)
-     VALUES ($1, $2)
-     RETURNING id, restaurant, order_data, created_at`,
-    [restaurant, JSON.stringify(order)]
+    `INSERT INTO saved_orders (user_id, restaurant, order_data, status)
+     VALUES ($1, $2, $3, 'suggested')
+     RETURNING ${ORDER_COLS}`,
+    [userId, restaurant, JSON.stringify(order)]
   );
   return rows[0];
 }
 
-export async function listOrders() {
+// Manually log an order the user actually had (status 'ordered'). order_data is
+// pinned to { items: [string, ...] }. ordered_at defaults to now() when omitted.
+export async function logOrder(userId, restaurant, items, orderedAt = null, notes = null) {
   const { rows } = await pool.query(
-    `SELECT id, restaurant, order_data, rating, created_at
+    `INSERT INTO saved_orders (user_id, restaurant, order_data, status, ordered_at, notes)
+     VALUES ($1, $2, $3, 'ordered', COALESCE($4, now()), $5)
+     RETURNING ${ORDER_COLS}`,
+    [userId, restaurant, JSON.stringify({ items }), orderedAt, notes]
+  );
+  return rows[0];
+}
+
+// This user's orders, newest first.
+export async function listOrders(userId) {
+  const { rows } = await pool.query(
+    `SELECT ${ORDER_COLS}
        FROM saved_orders
+      WHERE user_id = $1
    ORDER BY created_at DESC
-      LIMIT 50`
+      LIMIT 50`,
+    [userId]
   );
   return rows;
 }
 
-export async function deleteOrder(id) {
+// Fetch one order, but only if it belongs to this user. Returns the row or null
+// (the caller turns null into a 404 — never reveals another user's row).
+export async function getOrder(userId, id) {
+  const { rows } = await pool.query(
+    `SELECT ${ORDER_COLS} FROM saved_orders WHERE id = $1 AND user_id = $2`,
+    [id, userId]
+  );
+  return rows[0] || null;
+}
+
+// Delete one of this user's orders. Returns true if a row was actually removed.
+export async function deleteOrder(userId, id) {
   const { rowCount } = await pool.query(
-    `DELETE FROM saved_orders WHERE id = $1`,
-    [id]
+    `DELETE FROM saved_orders WHERE id = $1 AND user_id = $2`,
+    [id, userId]
   );
   return rowCount > 0;
 }
 
-export async function setOrderRating(id, rating) {
-  const { rowCount } = await pool.query(
-    `UPDATE saved_orders SET rating = $2 WHERE id = $1`,
-    [id, rating]
+// Mark a suggestion as ordered. Sets ordered_at to now() only if not already set
+// (manual re-marks shouldn't move the timestamp). Returns the updated row or null.
+export async function markOrdered(userId, id) {
+  const { rows } = await pool.query(
+    `UPDATE saved_orders
+        SET status = 'ordered',
+            ordered_at = COALESCE(ordered_at, now())
+      WHERE id = $1 AND user_id = $2
+  RETURNING ${ORDER_COLS}`,
+    [id, userId]
   );
-  return rowCount > 0;
+  return rows[0] || null;
+}
+
+// Update the free-text notes on one of this user's orders. Returns the row or null.
+export async function setNotes(userId, id, notes) {
+  const { rows } = await pool.query(
+    `UPDATE saved_orders SET notes = $3 WHERE id = $1 AND user_id = $2
+  RETURNING ${ORDER_COLS}`,
+    [id, userId, notes]
+  );
+  return rows[0] || null;
+}
+
+// Rate one of this user's orders 1–5 — but only if it's been 'ordered'. Returns
+// 'not_found' | 'not_ordered' | the updated row, so the route can map to 404/409.
+export async function setOrderRating(userId, id, rating) {
+  const existing = await getOrder(userId, id);
+  if (!existing) return 'not_found';
+  if (existing.status !== 'ordered') return 'not_ordered';
+  const { rows } = await pool.query(
+    `UPDATE saved_orders SET rating = $3 WHERE id = $1 AND user_id = $2
+  RETURNING ${ORDER_COLS}`,
+    [id, userId, rating]
+  );
+  return rows[0];
 }
 
 // --- Catalog cache reads/writes --------------------------------------------
@@ -230,4 +298,15 @@ export async function upsertUser({ workos_id, email = null, name = null }) {
     [workos_id, email, name]
   );
   return rows[0];
+}
+
+// Look up the local users row for a WorkOS id. Used per-request by the session
+// middleware to resolve the validated WorkOS user into our row (whose integer id
+// scopes saved_orders). Returns the row or null.
+export async function getUserByWorkosId(workos_id) {
+  const { rows } = await pool.query(
+    `SELECT id, workos_id, email, name, created_at FROM users WHERE workos_id = $1`,
+    [workos_id]
+  );
+  return rows[0] || null;
 }

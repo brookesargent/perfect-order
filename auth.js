@@ -87,3 +87,12 @@ export function toPublicUser(user) {
   const name = [user.firstName, user.lastName].filter(Boolean).join(' ');
   return { id: user.id, email: user.email, name };
 }
+
+// Express middleware: gate a route behind a valid session. The session
+// middleware sets req.user (the local users row) earlier in the chain; if it's
+// null the caller isn't logged in, so we 401 before the handler runs. Phase 2
+// guards the order endpoints with this; find/generate stay open.
+export function requireAuth(req, res, next) {
+  if (!req.user) return res.status(401).json({ error: 'Authentication required' });
+  next();
+}

@@ -58,29 +58,88 @@
         <p id="result-subtitle" class="muted hidden"></p>
         <p id="cache-cue" class="cache-cue hidden">Found instantly — from the catalog.</p>
 
+        <p id="result-status-line" class="result-status-line hidden">
+          <span id="status-badge" class="status-badge"></span>
+          <span id="ordered-on" class="muted"></span>
+        </p>
+
         <div id="rating-control" class="rating-control hidden" aria-label="Rate this order">
           <span class="rating-label">Your rating</span>
           <span id="rating-units" class="rating-units"></span>
         </div>
 
-        <h3>Must-haves</h3>
-        <ul id="must-haves"></ul>
+        <!-- AI-suggestion shape: must-haves / adventurous / skip -->
+        <div id="suggestion-detail">
+          <h3>Must-haves</h3>
+          <ul id="must-haves"></ul>
 
-        <h3>Feeling adventurous?</h3>
-        <ul id="adventurous"></ul>
+          <h3>Feeling adventurous?</h3>
+          <ul id="adventurous"></ul>
 
-        <h3>Skip</h3>
-        <ul id="skip"></ul>
+          <h3>Skip</h3>
+          <ul id="skip"></ul>
+        </div>
+
+        <!-- Manual-log shape: a flat list of items -->
+        <div id="logged-detail" class="hidden">
+          <h3>What you ordered</h3>
+          <ul id="logged-items"></ul>
+        </div>
+
+        <!-- Notes (editable on ordered entries) -->
+        <div id="notes-block" class="notes-block hidden">
+          <h3>Notes</h3>
+          <textarea id="notes-input" class="notes-input" rows="2" placeholder="How was it? Anything to remember for next time…"></textarea>
+          <div>
+            <button id="notes-save-btn" type="button">Save notes</button>
+            <span id="notes-status" class="status"></span>
+          </div>
+        </div>
 
         <button id="save-btn">Save this order</button>
+        <button id="mark-ordered-btn" class="hidden">Mark as ordered</button>
         <button id="delete-btn" class="danger hidden">Delete</button>
         <span id="save-status" class="status"></span>
       </section>
 
       <section id="saved">
-        <h2>Saved orders</h2>
-        <ul id="saved-list"></ul>
-        <p id="saved-empty" class="muted">No saved orders yet.</p>
+        <h2>Saved &amp; logged orders</h2>
+
+        <!-- Logged-out: gentle prompt instead of the list/log controls -->
+        <p id="auth-gate" class="muted hidden">
+          <a href="/auth/login" class="auth-link">Sign in</a> to save &amp; log orders.
+        </p>
+
+        <!-- Logged-in: the list + the manual log form -->
+        <div id="saved-pane" class="hidden">
+          <ul id="saved-list"></ul>
+          <p id="saved-empty" class="muted">No saved or logged orders yet.</p>
+
+          <h3>Log an order</h3>
+          <form id="log-form">
+            <input
+              id="log-restaurant"
+              name="log-restaurant"
+              list="restaurant-list"
+              placeholder="Where did you eat?"
+              autocomplete="off"
+              required
+            />
+            <textarea
+              id="log-items"
+              rows="4"
+              placeholder="One item per line&#10;e.g. Cheese coney&#10;Chili 3-way"
+              required
+            ></textarea>
+            <div class="log-form-row">
+              <label class="log-field-label" for="log-date">Date</label>
+              <input id="log-date" type="date" />
+            </div>
+            <textarea id="log-notes" rows="2" placeholder="Notes (optional)"></textarea>
+            <button type="submit" id="log-btn">Log this order</button>
+            <span id="log-status" class="status"></span>
+          </form>
+        </div>
       </section>
     </main>
 

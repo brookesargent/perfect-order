@@ -4,14 +4,15 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import {
-  initDb, isDbReady, saveOrder, listOrders, deleteOrder, setOrderRating,
+  initDb, isDbReady, saveOrder, logOrder, listOrders, deleteOrder,
+  markOrdered, setNotes, setOrderRating,
   findCachedCandidates, getCachedOrder, upsertRestaurant, upsertOrder,
-  upsertUser,
+  upsertUser, getUserByWorkosId,
 } from './db.js';
 import { composeOrder, findRestaurants } from './llm.js';
 import {
   isAuthConfigured, getAuthorizationUrl, authenticateWithCode, getUserFromCookie,
-  getLogoutUrl, toPublicUser, SESSION_COOKIE, COOKIE_OPTIONS,
+  getLogoutUrl, requireAuth, SESSION_COOKIE, COOKIE_OPTIONS,
 } from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,15 +25,23 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
-// Session middleware: when auth is configured, unseal the session cookie and
-// hang the current user off req.user (null if absent/invalid). Used by /api/me
-// now; Phase 2 will read it to scope per-user data. Never blocks the request —
-// when auth is unconfigured this is a no-op and the app behaves exactly as today.
+// Session middleware: when auth is configured, unseal the session cookie, then
+// resolve the validated WorkOS user into our LOCAL users row — req.user is that
+// row (null if logged out / invalid / DB down), so req.user.id is the integer
+// that scopes saved_orders. Never blocks the request: when auth is unconfigured
+// (or the DB is down) this leaves req.user null and the app behaves as today.
 app.use(async (req, _res, next) => {
   req.user = null;
   if (isAuthConfigured()) {
     const sessionData = req.cookies?.[SESSION_COOKIE];
-    req.user = await getUserFromCookie(sessionData);
+    const wosUser = await getUserFromCookie(sessionData);
+    if (wosUser && isDbReady()) {
+      try {
+        req.user = await getUserByWorkosId(wosUser.id);
+      } catch (err) {
+        console.error('[auth] user lookup failed — treating as logged out:', err.message);
+      }
+    }
   }
   next();
 });
@@ -49,8 +58,10 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, db: isDbReady() }));
 
 // Current user for the frontend. SHAPE IS A CONTRACT: {user: {id, email, name}}
 // when signed in, {user: null} otherwise (including when auth is unconfigured).
+// req.user is the local users row, so we project to the public {id, email, name}.
 app.get('/api/me', (req, res) => {
-  res.json({ user: toPublicUser(req.user) });
+  const u = req.user;
+  res.json({ user: u ? { id: u.id, email: u.email, name: u.name } : null });
 });
 
 // Kick off hosted login — redirect to the AuthKit authorization URL.
@@ -161,15 +172,30 @@ app.post('/api/generate', async (req, res) => {
   res.json({ ...order, source: 'web_search' });
 });
 
-// Save a generated order (global/shared — no users in v1).
-app.post('/api/orders', async (req, res) => {
+// --- Orders (Phase 2: per-user log). Every endpoint requires a logged-in user
+// (requireAuth → 401) and is scoped to req.user.id; you only ever touch your own
+// rows. find/generate above stay open — suggestions are for everyone.
+
+// List the current user's orders, newest first.
+app.get('/api/orders', requireAuth, async (req, res) => {
+  if (!isDbReady()) return res.json([]);
+  try {
+    res.json(await listOrders(req.user.id));
+  } catch (err) {
+    console.error('[api] list failed:', err.message);
+    res.status(500).json({ error: 'Could not list orders' });
+  }
+});
+
+// Save a generated order as a suggestion (status 'suggested').
+app.post('/api/orders', requireAuth, async (req, res) => {
   if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
   const { restaurant, order } = req.body || {};
   if (!restaurant || !order) {
     return res.status(400).json({ error: 'restaurant and order are required' });
   }
   try {
-    const saved = await saveOrder(restaurant, order);
+    const saved = await saveOrder(req.user.id, restaurant, order);
     res.status(201).json(saved);
   } catch (err) {
     console.error('[api] save failed:', err.message);
@@ -177,45 +203,86 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// List saved orders, newest first. Returns [] when the DB isn't wired up yet so
-// the page still loads cleanly during the first deploy.
-app.get('/api/orders', async (_req, res) => {
-  if (!isDbReady()) return res.json([]);
+// Manually log an order the user actually had (status 'ordered'). order_data is
+// pinned to { items: [string, ...] }; ordered_at defaults to now() if omitted.
+app.post('/api/orders/log', requireAuth, async (req, res) => {
+  if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
+  const { restaurant, items, ordered_at, notes } = req.body || {};
+  if (!restaurant || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'restaurant and a non-empty items array are required' });
+  }
+  if (!items.every((i) => typeof i === 'string')) {
+    return res.status(400).json({ error: 'items must be an array of strings' });
+  }
   try {
-    res.json(await listOrders());
+    const logged = await logOrder(req.user.id, restaurant, items, ordered_at || null, notes || null);
+    res.status(201).json(logged);
   } catch (err) {
-    console.error('[api] list failed:', err.message);
-    res.status(500).json({ error: 'Could not list orders' });
+    console.error('[api] log failed:', err.message);
+    res.status(500).json({ error: 'Could not log order' });
   }
 });
 
-// Delete a saved order by id. 204 on success, 404 if it didn't exist.
-app.delete('/api/orders/:id', async (req, res) => {
+// Promote a suggestion to 'ordered' (sets ordered_at if not already set).
+app.patch('/api/orders/:id/mark-ordered', requireAuth, async (req, res) => {
   if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
   try {
-    const deleted = await deleteOrder(req.params.id);
-    if (!deleted) return res.status(404).json({ error: 'Order not found' });
-    res.status(204).end();
+    const updated = await markOrdered(req.user.id, req.params.id);
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    res.json(updated);
   } catch (err) {
-    console.error('[api] delete failed:', err.message);
-    res.status(500).json({ error: 'Could not delete order' });
+    console.error('[api] mark-ordered failed:', err.message);
+    res.status(500).json({ error: 'Could not mark order as ordered' });
   }
 });
 
-// Rate a saved order 1–5. 204 on success, 404 if no such order.
-app.patch('/api/orders/:id/rating', async (req, res) => {
+// Rate an order 1–5 — only allowed once it's been 'ordered' (else 409).
+app.patch('/api/orders/:id/rating', requireAuth, async (req, res) => {
   if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
   const { rating } = req.body || {};
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
     return res.status(400).json({ error: 'rating must be an integer from 1 to 5' });
   }
   try {
-    const updated = await setOrderRating(req.params.id, rating);
-    if (!updated) return res.status(404).json({ error: 'Order not found' });
-    res.status(204).end();
+    const result = await setOrderRating(req.user.id, req.params.id, rating);
+    if (result === 'not_found') return res.status(404).json({ error: 'Order not found' });
+    if (result === 'not_ordered') {
+      return res.status(409).json({ error: 'Only ordered items can be rated' });
+    }
+    res.json(result);
   } catch (err) {
     console.error('[api] rating failed:', err.message);
     res.status(500).json({ error: 'Could not rate order' });
+  }
+});
+
+// Update the free-text notes on an order.
+app.patch('/api/orders/:id', requireAuth, async (req, res) => {
+  if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
+  const { notes } = req.body || {};
+  if (typeof notes !== 'string') {
+    return res.status(400).json({ error: 'notes must be a string' });
+  }
+  try {
+    const updated = await setNotes(req.user.id, req.params.id, notes);
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    res.json(updated);
+  } catch (err) {
+    console.error('[api] notes failed:', err.message);
+    res.status(500).json({ error: 'Could not update notes' });
+  }
+});
+
+// Delete one of the current user's orders. 204 on success, 404 if not found/owned.
+app.delete('/api/orders/:id', requireAuth, async (req, res) => {
+  if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
+  try {
+    const deleted = await deleteOrder(req.user.id, req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Order not found' });
+    res.status(204).end();
+  } catch (err) {
+    console.error('[api] delete failed:', err.message);
+    res.status(500).json({ error: 'Could not delete order' });
   }
 });
 

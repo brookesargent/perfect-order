@@ -176,3 +176,44 @@ button.danger:hover { border-color: #a3361a; }
 .saved-row:hover { border-color: var(--accent); }
 .saved-restaurant { font-weight: 600; }
 .saved-meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; }
+.saved-notes { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; font-style: italic; }
+
+/* Status badge (Suggested / Ordered) — used in result view and list rows */
+.status-badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.status-badge.suggested { background: #eef1f6; color: #4a5468; }
+.status-badge.ordered { background: #e9f3e6; color: #43603a; }
+
+.result-status-line { margin: 0.5rem 0 0; display: flex; align-items: center; gap: 0.5rem; }
+.result-status-line .muted { font-size: 0.85rem; }
+
+#mark-ordered-btn { margin-top: 1rem; margin-left: 0.5rem; }
+
+/* Notes editor on ordered entries */
+.notes-block { margin-top: 0.5rem; }
+.notes-input, #log-form textarea {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 1rem;
+  font-family: inherit;
+  background: var(--card);
+  resize: vertical;
+}
+.notes-block button { margin-top: 0.5rem; }
+
+/* Manual "Log an order" form — stacked full-width fields */
+#log-form { display: block; }
+#log-form input,
+#log-form textarea { display: block; width: 100%; margin: 0.5rem 0; }
+.log-form-row { display: flex; align-items: center; gap: 0.6rem; margin: 0.5rem 0; }
+.log-field-label { color: var(--muted); font-size: 0.85rem; }
+#log-form input[type="date"] { width: auto; flex: 0 0 auto; margin: 0; }
+#log-btn { margin-top: 0.25rem; }
