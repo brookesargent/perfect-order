@@ -2,10 +2,17 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
-import { initDb, isDbReady, saveOrder, listOrders } from './db.js';
+import {
+  initDb, isDbReady, saveOrder, listOrders,
+  findCachedCandidates, getCachedOrder, upsertRestaurant, upsertOrder,
+} from './db.js';
 import { composeOrder, findRestaurants } from './llm.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// An order is "fresh enough" if it was composed within this window; otherwise a
+// /api/generate request recomposes and overwrites the cached entry.
+const CACHE_TTL_DAYS = 30;
 
 const app = express();
 app.use(express.json());
@@ -21,8 +28,30 @@ app.get('/healthz', (_req, res) => res.json({ ok: true, db: isDbReady() }));
 app.post('/api/find', async (req, res) => {
   const query = (req.body?.query || '').trim();
   if (!query) return res.status(400).json({ error: 'query is required' });
+
+  // Read-through: try the catalog first. A cache hit skips the ~50s web search.
+  // Any DB hiccup just falls through to the live search — caching is never fatal.
+  if (isDbReady()) {
+    try {
+      const cached = await findCachedCandidates(query);
+      if (cached.length > 0) return res.json({ candidates: cached, source: 'cache' });
+    } catch (err) {
+      console.error('[cache] find lookup failed — falling through to search:', err.message);
+    }
+  }
+
   const candidates = await findRestaurants(query);
-  res.json({ candidates });
+
+  // Backfill the catalog with what we found (only grounded, real matches — not
+  // the bare-query fallback). Fire-and-forget: we still return the candidates.
+  if (isDbReady()) {
+    for (const c of candidates) {
+      if (!c.grounded) continue;
+      upsertRestaurant(c).catch((err) => console.error('[cache] find upsert failed:', err.message));
+    }
+  }
+
+  res.json({ candidates, source: 'web_search' });
 });
 
 // Step 2: compose an order for the confirmed restaurant, grounded in its real
@@ -30,10 +59,32 @@ app.post('/api/find', async (req, res) => {
 // object ({name, location, cuisine}); a bare string is also accepted.
 app.post('/api/generate', async (req, res) => {
   const { restaurant } = req.body || {};
-  const name = typeof restaurant === 'string' ? restaurant.trim() : (restaurant?.name || '').trim();
+  const r = typeof restaurant === 'string' ? { name: restaurant.trim() } : (restaurant || {});
+  const name = (r.name || '').trim();
   if (!name) return res.status(400).json({ error: 'restaurant is required' });
+
+  // Read-through: serve a cached order if we have a fresh one. The cached blob
+  // already carries restaurant/location/cuisine, so a hit is fully self-contained.
+  if (isDbReady()) {
+    try {
+      const cached = await getCachedOrder(name, r.location, CACHE_TTL_DAYS);
+      if (cached) return res.json({ ...cached, source: 'cache' });
+    } catch (err) {
+      console.error('[cache] order lookup failed — falling through to compose:', err.message);
+    }
+  }
+
   const order = await composeOrder(restaurant);
-  res.json(order);
+
+  // Write-through: cache the composed order (also refreshes stale entries, since
+  // upsertOrder overwrites order_data + last_composed_at). Never cache fallbacks
+  // — they're canned placeholders, not a real grounded menu.
+  if (isDbReady() && !order.fallback) {
+    upsertOrder(name, r.location, r.cuisine, order, 'web_search')
+      .catch((err) => console.error('[cache] order upsert failed:', err.message));
+  }
+
+  res.json({ ...order, source: 'web_search' });
 });
 
 // Save a generated order (global/shared — no users in v1).

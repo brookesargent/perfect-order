@@ -8,7 +8,10 @@ const candidateList = document.getElementById('candidate-list');
 
 const result = document.getElementById('result');
 const resultTitle = document.getElementById('result-title');
+const resultSubtitle = document.getElementById('result-subtitle');
+const cacheCue = document.getElementById('cache-cue');
 const fallbackNote = document.getElementById('fallback-note');
+const savedNote = document.getElementById('saved-note');
 const mustHavesEl = document.getElementById('must-haves');
 const adventurousEl = document.getElementById('adventurous');
 const skipEl = document.getElementById('skip');
@@ -21,6 +24,8 @@ const savedEmpty = document.getElementById('saved-empty');
 
 // Holds the most recently generated order so "Save" knows what to persist.
 let currentOrder = null;
+// Saved orders kept in memory so clicking a row re-renders without a network call.
+let savedOrders = [];
 
 // --- Step 1: find + confirm ------------------------------------------------
 
@@ -74,7 +79,11 @@ function renderCandidates(candidates) {
 
 async function chooseCandidate(candidate) {
   confirmSection.classList.add('hidden');
-  findStatus.textContent = 'Composing your order — reading the menu (this can take ~30–45s)…';
+  // Grounded candidates come from the catalog and compose from cache (instant),
+  // so skip the long-wait status for them. Anything else means a web search.
+  findStatus.textContent = candidate.grounded
+    ? 'Pulling your order from the catalog…'
+    : 'Composing your order — reading the menu (this can take ~30–45s)…';
 
   try {
     const res = await fetch('/api/generate', {
@@ -100,16 +109,52 @@ function renderItems(el, items) {
   }
 }
 
+// Builds the header line under the title from location + cuisine, when present.
+// Both are new fields, so older saved orders may not have them — render only
+// what's there, and hide the line entirely if neither is set.
+function renderHeader(order) {
+  resultTitle.textContent = order.restaurant || '';
+  const sub = [order.location, order.cuisine].filter(Boolean).join(' · ');
+  resultSubtitle.textContent = sub;
+  resultSubtitle.classList.toggle('hidden', !sub);
+}
+
 function renderOrder(order) {
   currentOrder = order;
-  resultTitle.textContent = order.restaurant;
+  renderHeader(order);
+  savedNote.classList.add('hidden');
   fallbackNote.classList.toggle('hidden', !order.fallback);
-  renderItems(mustHavesEl, order.must_haves);
-  renderItems(adventurousEl, [order.adventurous]);
-  renderItems(skipEl, order.skip);
+  cacheCue.classList.toggle('hidden', order.source !== 'cache');
+  renderItems(mustHavesEl, order.must_haves || []);
+  renderItems(adventurousEl, order.adventurous ? [order.adventurous] : []);
+  renderItems(skipEl, order.skip || []);
   result.classList.remove('hidden');
+  // Fresh order: offer to save it.
+  saveBtn.classList.remove('hidden');
   saveBtn.disabled = false;
+  saveBtn.textContent = 'Save this order';
   saveStatus.textContent = '';
+  result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// Re-render an already-saved order from its stored order_data — no network call,
+// no recompute. Makes clear this is a saved view and doesn't offer to re-save.
+function renderSavedOrder(order) {
+  currentOrder = null;
+  renderHeader(order);
+  savedNote.classList.remove('hidden');
+  fallbackNote.classList.toggle('hidden', !order.fallback);
+  // Source on saved orders reflects how it was originally composed; the catalog
+  // cue isn't meaningful here, so keep it hidden.
+  cacheCue.classList.add('hidden');
+  renderItems(mustHavesEl, order.must_haves || []);
+  renderItems(adventurousEl, order.adventurous ? [order.adventurous] : []);
+  renderItems(skipEl, order.skip || []);
+  result.classList.remove('hidden');
+  // Already saved — don't offer to save again.
+  saveBtn.classList.add('hidden');
+  saveStatus.textContent = '';
+  result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // --- Save + list -----------------------------------------------------------
@@ -143,15 +188,24 @@ async function loadSaved() {
   try {
     const res = await fetch('/api/orders');
     const orders = await res.json();
+    savedOrders = orders;
     savedList.innerHTML = '';
     savedEmpty.classList.toggle('hidden', orders.length > 0);
     for (const row of orders) {
       const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.className = 'saved-row';
       const when = new Date(row.created_at).toLocaleString();
       const count = row.order_data?.must_haves?.length ?? 0;
-      li.innerHTML =
+      btn.innerHTML =
         `<span class="saved-restaurant">${row.restaurant}</span>` +
         `<div class="saved-meta">${count} must-have${count === 1 ? '' : 's'} · ${when}</div>`;
+      // Render from the order_data we already have — no network call, no recompute.
+      // Fall back to the row's restaurant name in case order_data lacks one.
+      btn.addEventListener('click', () =>
+        renderSavedOrder({ restaurant: row.restaurant, ...(row.order_data || {}) })
+      );
+      li.appendChild(btn);
       savedList.appendChild(li);
     }
   } catch (err) {

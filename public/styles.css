@@ -95,7 +95,34 @@ section { border-top: 1px solid var(--line); }
 
 #save-btn { margin-top: 1rem; }
 
-#saved-list li { padding: 0.5rem 0; border-bottom: 1px solid var(--line); list-style: none; }
+#result-subtitle { margin: 0.1rem 0 0; font-size: 0.95rem; }
+
+.cache-cue {
+  margin: 0.5rem 0 0;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.saved-note {
+  background: #f1f5ef;
+  border-color: #d6e2cf;
+  color: #43603a;
+}
+
 #saved-list { padding-left: 0; }
+#saved-list li { list-style: none; }
+.saved-row {
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin: 0.4rem 0;
+  cursor: pointer;
+  font-size: 1rem;
+}
+.saved-row:hover { border-color: var(--accent); }
 .saved-restaurant { font-weight: 600; }
-.saved-meta { color: var(--muted); font-size: 0.85rem; }
+.saved-meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; }

@@ -44,9 +44,11 @@ function fallbackCandidates(query) {
   return [{ name: query, location: '', cuisine: '', grounded: false }];
 }
 
-function fallbackOrder(displayName) {
+function fallbackOrder(displayName, location = '', cuisine = '') {
   return {
     restaurant: displayName,
+    location,
+    cuisine,
     must_haves: [
       { item: 'The house specialty everyone recommends', why: 'It is what this place is known for.' },
       { item: 'A shareable starter', why: 'Good to split while you decide on the rest.' },
@@ -97,8 +99,10 @@ If you genuinely cannot find a match, return one candidate using the name as giv
 export async function composeOrder(restaurant) {
   const r = typeof restaurant === 'string' ? { name: restaurant } : restaurant || {};
   const displayName = r.location ? `${r.name} (${r.location})` : r.name || 'this restaurant';
+  const location = r.location || '';
+  const cuisine = r.cuisine || '';
 
-  if (!client) return fallbackOrder(displayName);
+  if (!client) return fallbackOrder(displayName, location, cuisine);
 
   const prompt = `Use web search to find the actual current menu of this restaurant:
 - name: ${r.name}
@@ -117,13 +121,15 @@ Respond with ONLY a JSON object, no prose:
     );
     const order = extractJson(collectText(resp.content));
     if (!order || !Array.isArray(order.must_haves) || !order.adventurous || !Array.isArray(order.skip)) {
-      return fallbackOrder(displayName);
+      return fallbackOrder(displayName, location, cuisine);
     }
     order.restaurant = displayName;
+    order.location = location;
+    order.cuisine = cuisine;
     order.fallback = false;
     return order;
   } catch (err) {
     console.error('[llm] composeOrder failed — serving fallback:', err.message);
-    return fallbackOrder(displayName);
+    return fallbackOrder(displayName, location, cuisine);
   }
 }
