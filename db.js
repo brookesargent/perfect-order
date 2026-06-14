@@ -60,6 +60,21 @@ CREATE TABLE IF NOT EXISTS restaurants (
 );
 `;
 
+// --- Users (Phase 1 auth shadow table). -------------------------------------
+
+// A shadow of WorkOS users — WorkOS owns identity; we mirror just enough to join
+// future per-user data against (Phase 2). Phase 1 only fills this on login; it
+// does NOT gate or scope any existing feature. Same idempotent boot contract.
+const USERS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id          SERIAL PRIMARY KEY,
+  workos_id   TEXT NOT NULL UNIQUE,
+  email       TEXT,
+  name        TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+`;
+
 export async function initDb() {
   if (!pool) {
     console.warn('[db] DATABASE_URL not set — saved-orders features are disabled.');
@@ -75,6 +90,7 @@ export async function initDb() {
     // "way/12345"). Null for organic web_search/manual rows; populated by the
     // Workflows bulk-ingest pipeline (workflows/) as a stable external id.
     await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS osm_id TEXT;`);
+    await pool.query(USERS_SCHEMA);
     ready = true;
     console.log('[db] connected; schema ready.');
     return true;
@@ -196,4 +212,22 @@ export async function upsertOrder(name, location = '', cuisine = '', order, sour
             updated_at = now()`,
     [key, name, location, cuisine, JSON.stringify(order), source]
   );
+}
+
+// --- Users ------------------------------------------------------------------
+
+// UPSERT a WorkOS user into our shadow table on login, keyed by workos_id.
+// Refreshes email/name on every login so they stay current. Returns the local
+// row. Phase 1 only records the user; nothing reads it to scope features yet.
+export async function upsertUser({ workos_id, email = null, name = null }) {
+  const { rows } = await pool.query(
+    `INSERT INTO users (workos_id, email, name)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (workos_id) DO UPDATE
+        SET email = EXCLUDED.email,
+            name = EXCLUDED.name
+     RETURNING id, workos_id, email, name, created_at`,
+    [workos_id, email, name]
+  );
+  return rows[0];
 }

@@ -26,6 +26,10 @@ const saveBtn = document.getElementById('save-btn');
 const deleteBtn = document.getElementById('delete-btn');
 const saveStatus = document.getElementById('save-status');
 
+const signinLink = document.getElementById('signin-link');
+const userInfo = document.getElementById('user-info');
+const userName = document.getElementById('user-name');
+
 const savedList = document.getElementById('saved-list');
 const savedEmpty = document.getElementById('saved-empty');
 
@@ -311,4 +315,30 @@ async function loadSaved() {
   }
 }
 
+// --- Auth (Phase 1: surface state only; nothing is gated) ------------------
+
+// Fetch login state and show either "Sign in" or the user's name + "Sign out".
+// The links are plain anchors to /auth/login and /auth/logout (server handles
+// the redirect), so they work even if this fetch fails — we just default to
+// the signed-out view.
+async function loadAuth() {
+  let user = null;
+  try {
+    const res = await fetch('/api/me');
+    ({ user } = await res.json());
+  } catch (err) {
+    console.error('Could not load auth state', err);
+  }
+
+  if (user) {
+    userName.textContent = user.name || user.email || '';
+    userInfo.classList.remove('hidden');
+    signinLink.classList.add('hidden');
+  } else {
+    signinLink.classList.remove('hidden');
+    userInfo.classList.add('hidden');
+  }
+}
+
+loadAuth();
 loadSaved();

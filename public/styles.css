@@ -22,6 +22,24 @@ main {
   padding: 2rem 1.25rem 4rem;
 }
 
+.auth-bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 1.4rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.85rem;
+}
+.auth-user { display: flex; align-items: center; gap: 0.6rem; }
+.auth-user #user-name { color: var(--muted); }
+.auth-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+}
+.auth-link:hover { text-decoration: underline; }
+
 h1 { margin: 0 0 0.25rem; font-size: 2rem; }
 .tagline { margin: 0 0 1.5rem; color: var(--muted); }
 

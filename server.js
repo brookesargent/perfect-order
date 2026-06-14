@@ -1,12 +1,18 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import {
   initDb, isDbReady, saveOrder, listOrders, deleteOrder, setOrderRating,
   findCachedCandidates, getCachedOrder, upsertRestaurant, upsertOrder,
+  upsertUser,
 } from './db.js';
 import { composeOrder, findRestaurants } from './llm.js';
+import {
+  isAuthConfigured, getAuthorizationUrl, authenticateWithCode, getUserFromCookie,
+  getLogoutUrl, toPublicUser, SESSION_COOKIE, COOKIE_OPTIONS,
+} from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -16,12 +22,80 @@ const CACHE_TTL_DAYS = 30;
 
 const app = express();
 app.use(express.json());
+app.use(cookieParser());
+
+// Session middleware: when auth is configured, unseal the session cookie and
+// hang the current user off req.user (null if absent/invalid). Used by /api/me
+// now; Phase 2 will read it to scope per-user data. Never blocks the request —
+// when auth is unconfigured this is a no-op and the app behaves exactly as today.
+app.use(async (req, _res, next) => {
+  req.user = null;
+  if (isAuthConfigured()) {
+    const sessionData = req.cookies?.[SESSION_COOKIE];
+    req.user = await getUserFromCookie(sessionData);
+  }
+  next();
+});
 
 // Serve the frontend (public/) as static files from the same service.
 app.use(express.static(join(__dirname, 'public')));
 
 // Health check — Render hits this to gate deploys (see healthCheckPath in render.yaml).
 app.get('/healthz', (_req, res) => res.json({ ok: true, db: isDbReady() }));
+
+// --- Auth (Phase 1: AuthKit login/logout + shadow users table) -------------
+// All routes degrade gracefully when WorkOS env vars are unset, mirroring the
+// DATABASE_URL/ANTHROPIC handling: nothing crashes, the app works as today.
+
+// Current user for the frontend. SHAPE IS A CONTRACT: {user: {id, email, name}}
+// when signed in, {user: null} otherwise (including when auth is unconfigured).
+app.get('/api/me', (req, res) => {
+  res.json({ user: toPublicUser(req.user) });
+});
+
+// Kick off hosted login — redirect to the AuthKit authorization URL.
+app.get('/auth/login', (_req, res) => {
+  if (!isAuthConfigured()) {
+    return res.status(503).json({ error: 'Authentication is not configured' });
+  }
+  res.redirect(getAuthorizationUrl());
+});
+
+// AuthKit redirect target: exchange the code, seal the session into an httpOnly
+// cookie, mirror the user into our table, then land back on the app.
+app.get('/auth/callback', async (req, res) => {
+  if (!isAuthConfigured()) {
+    return res.status(503).json({ error: 'Authentication is not configured' });
+  }
+  const code = (req.query?.code || '').toString();
+  if (!code) return res.status(400).json({ error: 'code is required' });
+  try {
+    const { user, sealedSession } = await authenticateWithCode(code);
+    res.cookie(SESSION_COOKIE, sealedSession, COOKIE_OPTIONS);
+    // Mirror the user into our shadow table. Non-fatal: a DB hiccup shouldn't
+    // block login — the session cookie is already set.
+    if (isDbReady()) {
+      upsertUser({
+        workos_id: user.id,
+        email: user.email,
+        name: [user.firstName, user.lastName].filter(Boolean).join(' ') || null,
+      }).catch((err) => console.error('[auth] user upsert failed:', err.message));
+    }
+    res.redirect('/');
+  } catch (err) {
+    console.error('[auth] callback failed:', err.message);
+    res.redirect('/');
+  }
+});
+
+// Clear the session cookie and send the user to the WorkOS hosted logout (which
+// ends the WorkOS session and redirects back), or home if we can't build it.
+app.get('/auth/logout', async (req, res) => {
+  const sessionData = req.cookies?.[SESSION_COOKIE];
+  const logoutUrl = isAuthConfigured() ? await getLogoutUrl(sessionData) : null;
+  res.clearCookie(SESSION_COOKIE, COOKIE_OPTIONS);
+  res.redirect(logoutUrl || '/');
+});
 
 // Step 1: find + disambiguate the restaurant via web search. Returns up to a
 // few candidates for the user to confirm (solves "which Mio's did you mean?").
