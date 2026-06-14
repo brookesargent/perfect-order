@@ -1,62 +1,52 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 // Read the key from the environment — never hardcode it. If it's missing we
-// fall straight through to the sample response so the app still renders.
+// fall through to sample data so the app still renders.
 const apiKey = process.env.ANTHROPIC_API_KEY;
 const client = apiKey ? new Anthropic({ apiKey }) : null;
 
 const MODEL = 'claude-sonnet-4-6';
 
-// Structured output schema — constrains Claude's response to exactly this shape
-// so the frontend can render it without defensive parsing. (Anthropic structured
-// outputs require additionalProperties:false on every object.)
-const ORDER_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    restaurant: { type: 'string' },
-    must_haves: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          item: { type: 'string' },
-          why: { type: 'string' },
-        },
-        required: ['item', 'why'],
-      },
-    },
-    adventurous: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        item: { type: 'string' },
-        why: { type: 'string' },
-      },
-      required: ['item', 'why'],
-    },
-    skip: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          item: { type: 'string' },
-          why: { type: 'string' },
-        },
-        required: ['item', 'why'],
-      },
-    },
-  },
-  required: ['restaurant', 'must_haves', 'adventurous', 'skip'],
-};
+// Server-side web search tool — lets Claude look up the real restaurant + menu
+// instead of guessing from training data. This is the grounding that makes
+// off-the-beaten-path restaurants accurate.
+const WEB_SEARCH = { type: 'web_search_20260209', name: 'web_search' };
 
-// Canned response used whenever the AI call can't be made or fails. Generic but
-// plausible, so a flaky API key (or no key at all) never breaks the demo.
-function fallbackOrder(restaurant) {
+// Web search responses carry citations, which are incompatible with strict
+// structured outputs (output_config.format → 400). So we instruct JSON in the
+// prompt and parse it ourselves, with a forgiving extractor + fallback.
+function collectText(content) {
+  return content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('\n')
+    .trim();
+}
+
+function extractJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {}
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {}
+  }
+  return null;
+}
+
+// --- Fallbacks (used when there's no key or the call/parse fails) ----------
+
+function fallbackCandidates(query) {
+  // One candidate = the raw query, so the confirm→compose flow still works.
+  return [{ name: query, location: '', cuisine: '', grounded: false }];
+}
+
+function fallbackOrder(displayName) {
   return {
-    restaurant,
+    restaurant: displayName,
     must_haves: [
       { item: 'The house specialty everyone recommends', why: 'It is what this place is known for.' },
       { item: 'A shareable starter', why: 'Good to split while you decide on the rest.' },
@@ -65,42 +55,75 @@ function fallbackOrder(restaurant) {
       item: 'The chef’s special or off-menu pick',
       why: 'A small risk that usually pays off if you are feeling brave.',
     },
-    skip: [
-      { item: 'The oversized combo deal', why: 'More food than flavor — order à la carte instead.' },
-    ],
+    skip: [{ item: 'The oversized combo deal', why: 'More food than flavor — order à la carte instead.' }],
     fallback: true,
   };
 }
 
-export async function composeOrder(restaurant) {
-  if (!client) return fallbackOrder(restaurant);
+// --- Step 1: find + disambiguate -------------------------------------------
 
-  const prompt = `You are a savvy regular who knows "${restaurant}" inside out.
-Compose the *perfect order*:
-- must_haves: 2-4 dishes a first-timer should absolutely get, each with a one-line "why".
-- adventurous: ONE bolder pick for someone feeling brave (e.g. "if you're into seafood..."), with a "why".
-- skip: 1-3 things that are overrated or not worth it, each with a one-line "why".
-Use specific, real-sounding menu item names. Keep every "why" to one short sentence.`;
+export async function findRestaurants(query) {
+  if (!client) return fallbackCandidates(query);
+
+  const prompt = `The user typed this restaurant name: "${query}".
+Use web search to identify up to 3 real, specific restaurants that best match it. If the query names a city or area, prioritize matches there; otherwise prefer the most likely / well-known matches.
+For each, provide: name, location (city + neighborhood if known), and cuisine.
+Respond with ONLY a JSON object, no prose:
+{"candidates":[{"name":"...","location":"...","cuisine":"..."}]}
+If you genuinely cannot find a match, return one candidate using the name as given with empty location and cuisine.`;
 
   try {
-    const response = await client.messages.create(
-      {
-        model: MODEL,
-        max_tokens: 1024,
-        output_config: { format: { type: 'json_schema', schema: ORDER_SCHEMA } },
-        messages: [{ role: 'user', content: prompt }],
-      },
-      // Per-request timeout so a slow API can't hang the page — on timeout the
-      // SDK throws, we catch below, and serve the sample instead.
-      { timeout: 12000 }
+    const resp = await client.messages.create(
+      { model: MODEL, max_tokens: 1024, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
+      { timeout: 30000 }
     );
+    const data = extractJson(collectText(resp.content));
+    const candidates = data?.candidates;
+    if (!Array.isArray(candidates) || candidates.length === 0) return fallbackCandidates(query);
+    return candidates.slice(0, 3).map((c) => ({
+      name: c.name || query,
+      location: c.location || '',
+      cuisine: c.cuisine || '',
+      grounded: true,
+    }));
+  } catch (err) {
+    console.error('[llm] findRestaurants failed — serving fallback:', err.message);
+    return fallbackCandidates(query);
+  }
+}
 
-    const textBlock = response.content.find((b) => b.type === 'text');
-    const order = JSON.parse(textBlock.text);
+// --- Step 2: compose the order, grounded in the confirmed restaurant -------
+
+export async function composeOrder(restaurant) {
+  const r = typeof restaurant === 'string' ? { name: restaurant } : restaurant || {};
+  const displayName = r.location ? `${r.name} (${r.location})` : r.name || 'this restaurant';
+
+  if (!client) return fallbackOrder(displayName);
+
+  const prompt = `Use web search to find the actual current menu of this restaurant:
+- name: ${r.name}
+${r.location ? `- location: ${r.location}\n` : ''}${r.cuisine ? `- cuisine: ${r.cuisine}\n` : ''}Based on its REAL menu items, compose the perfect order:
+- must_haves: 2-4 specific dishes a first-timer should get, each with a one-line why tied to this restaurant.
+- adventurous: ONE bolder real menu item, with a why.
+- skip: 1-3 real menu items that are overrated or not worth it, with a why.
+Use actual dish names from the menu wherever you can find them. Keep each "why" to one short sentence.
+Respond with ONLY a JSON object, no prose:
+{"restaurant":"...","must_haves":[{"item":"...","why":"..."}],"adventurous":{"item":"...","why":"..."},"skip":[{"item":"...","why":"..."}]}`;
+
+  try {
+    const resp = await client.messages.create(
+      { model: MODEL, max_tokens: 1500, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
+      { timeout: 60000 }
+    );
+    const order = extractJson(collectText(resp.content));
+    if (!order || !Array.isArray(order.must_haves) || !order.adventurous || !Array.isArray(order.skip)) {
+      return fallbackOrder(displayName);
+    }
+    order.restaurant = displayName;
     order.fallback = false;
     return order;
   } catch (err) {
     console.error('[llm] composeOrder failed — serving fallback:', err.message);
-    return fallbackOrder(restaurant);
+    return fallbackOrder(displayName);
   }
 }

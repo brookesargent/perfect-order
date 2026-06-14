@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import { initDb, isDbReady, saveOrder, listOrders } from './db.js';
-import { composeOrder } from './llm.js';
+import { composeOrder, findRestaurants } from './llm.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -16,10 +16,22 @@ app.use(express.static(join(__dirname, 'public')));
 // Health check — Render hits this to gate deploys (see healthCheckPath in render.yaml).
 app.get('/healthz', (_req, res) => res.json({ ok: true, db: isDbReady() }));
 
-// Generate an order. Does NOT save — the user decides whether to keep it.
+// Step 1: find + disambiguate the restaurant via web search. Returns up to a
+// few candidates for the user to confirm (solves "which Mio's did you mean?").
+app.post('/api/find', async (req, res) => {
+  const query = (req.body?.query || '').trim();
+  if (!query) return res.status(400).json({ error: 'query is required' });
+  const candidates = await findRestaurants(query);
+  res.json({ candidates });
+});
+
+// Step 2: compose an order for the confirmed restaurant, grounded in its real
+// menu via web search. Does NOT save. `restaurant` is the confirmed candidate
+// object ({name, location, cuisine}); a bare string is also accepted.
 app.post('/api/generate', async (req, res) => {
-  const restaurant = (req.body?.restaurant || '').trim();
-  if (!restaurant) return res.status(400).json({ error: 'restaurant is required' });
+  const { restaurant } = req.body || {};
+  const name = typeof restaurant === 'string' ? restaurant.trim() : (restaurant?.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'restaurant is required' });
   const order = await composeOrder(restaurant);
   res.json(order);
 });

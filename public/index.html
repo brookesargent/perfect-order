@@ -9,33 +9,39 @@
   <body>
     <main>
       <h1>Perfect Order</h1>
-      <p class="tagline">Tell me where you're eating. I'll compose the ideal order.</p>
+      <p class="tagline">Tell me where you're eating. I'll look it up and compose the ideal order.</p>
 
       <form id="compose-form">
         <input
           id="restaurant"
           name="restaurant"
           list="restaurant-list"
-          placeholder="e.g. Skyline Chili"
+          placeholder="e.g. Sotto, Cincinnati"
           autocomplete="off"
           required
         />
         <datalist id="restaurant-list">
           <option value="Skyline Chili"></option>
           <option value="Graeter's"></option>
+          <option value="Sotto, Cincinnati"></option>
           <option value="Chipotle"></option>
           <option value="In-N-Out"></option>
           <option value="Shake Shack"></option>
-          <option value="Olive Garden"></option>
           <option value="The Cheesecake Factory"></option>
-          <option value="A neighborhood sushi bar"></option>
         </datalist>
-        <button type="submit" id="compose-btn">Compose my order</button>
+        <button type="submit" id="find-btn">Find restaurant</button>
       </form>
+      <p id="find-status" class="status"></p>
+
+      <section id="confirm" class="hidden">
+        <h2>Which one?</h2>
+        <p class="muted">Pick the spot you mean — I'll build the order from its actual menu.</p>
+        <ul id="candidate-list"></ul>
+      </section>
 
       <section id="result" class="hidden">
         <div id="fallback-note" class="note hidden">
-          Showing a sample order — the AI was unavailable.
+          Showing a sample order — couldn't reach the menu just now.
         </div>
         <h2 id="result-title"></h2>
 
