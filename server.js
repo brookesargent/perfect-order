@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import {
-  initDb, isDbReady, saveOrder, listOrders,
+  initDb, isDbReady, saveOrder, listOrders, deleteOrder,
   findCachedCandidates, getCachedOrder, upsertRestaurant, upsertOrder,
 } from './db.js';
 import { composeOrder, findRestaurants } from './llm.js';
@@ -112,6 +112,19 @@ app.get('/api/orders', async (_req, res) => {
   } catch (err) {
     console.error('[api] list failed:', err.message);
     res.status(500).json({ error: 'Could not list orders' });
+  }
+});
+
+// Delete a saved order by id. 204 on success, 404 if it didn't exist.
+app.delete('/api/orders/:id', async (req, res) => {
+  if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
+  try {
+    const deleted = await deleteOrder(req.params.id);
+    if (!deleted) return res.status(404).json({ error: 'Order not found' });
+    res.status(204).end();
+  } catch (err) {
+    console.error('[api] delete failed:', err.message);
+    res.status(500).json({ error: 'Could not delete order' });
   }
 });
 

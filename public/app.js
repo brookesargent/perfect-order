@@ -17,6 +17,7 @@ const adventurousEl = document.getElementById('adventurous');
 const skipEl = document.getElementById('skip');
 
 const saveBtn = document.getElementById('save-btn');
+const deleteBtn = document.getElementById('delete-btn');
 const saveStatus = document.getElementById('save-status');
 
 const savedList = document.getElementById('saved-list');
@@ -26,6 +27,9 @@ const savedEmpty = document.getElementById('saved-empty');
 let currentOrder = null;
 // Saved orders kept in memory so clicking a row re-renders without a network call.
 let savedOrders = [];
+// The id of the saved order currently shown in the revisit view, so Delete
+// knows which row to remove. null when viewing a fresh (unsaved) order.
+let viewingSavedId = null;
 
 // --- Step 1: find + confirm ------------------------------------------------
 
@@ -121,6 +125,7 @@ function renderHeader(order) {
 
 function renderOrder(order) {
   currentOrder = order;
+  viewingSavedId = null;
   renderHeader(order);
   savedNote.classList.add('hidden');
   fallbackNote.classList.toggle('hidden', !order.fallback);
@@ -129,18 +134,20 @@ function renderOrder(order) {
   renderItems(adventurousEl, order.adventurous ? [order.adventurous] : []);
   renderItems(skipEl, order.skip || []);
   result.classList.remove('hidden');
-  // Fresh order: offer to save it.
+  // Fresh order: offer to save it, and never delete (nothing saved to delete).
   saveBtn.classList.remove('hidden');
   saveBtn.disabled = false;
   saveBtn.textContent = 'Save this order';
+  deleteBtn.classList.add('hidden');
   saveStatus.textContent = '';
   result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // Re-render an already-saved order from its stored order_data — no network call,
 // no recompute. Makes clear this is a saved view and doesn't offer to re-save.
-function renderSavedOrder(order) {
+function renderSavedOrder(id, order) {
   currentOrder = null;
+  viewingSavedId = id;
   renderHeader(order);
   savedNote.classList.remove('hidden');
   fallbackNote.classList.toggle('hidden', !order.fallback);
@@ -151,8 +158,11 @@ function renderSavedOrder(order) {
   renderItems(adventurousEl, order.adventurous ? [order.adventurous] : []);
   renderItems(skipEl, order.skip || []);
   result.classList.remove('hidden');
-  // Already saved — don't offer to save again.
+  // Already saved — don't offer to save again, but allow deleting it.
   saveBtn.classList.add('hidden');
+  deleteBtn.classList.remove('hidden');
+  deleteBtn.disabled = false;
+  deleteBtn.textContent = 'Delete';
   saveStatus.textContent = '';
   result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -184,6 +194,30 @@ saveBtn.addEventListener('click', async () => {
   }
 });
 
+deleteBtn.addEventListener('click', async () => {
+  if (viewingSavedId == null) return;
+  if (!confirm('Delete this saved order?')) return;
+  deleteBtn.disabled = true;
+  saveStatus.textContent = 'Deleting…';
+  try {
+    const res = await fetch(`/api/orders/${viewingSavedId}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) {
+      const { error } = await res.json().catch(() => ({}));
+      saveStatus.textContent = error || 'Could not delete.';
+      deleteBtn.disabled = false;
+      return;
+    }
+    // It's gone — refresh the list and close the revisit view.
+    viewingSavedId = null;
+    result.classList.add('hidden');
+    await loadSaved();
+  } catch (err) {
+    saveStatus.textContent = 'Could not delete.';
+    deleteBtn.disabled = false;
+    console.error(err);
+  }
+});
+
 async function loadSaved() {
   try {
     const res = await fetch('/api/orders');
@@ -203,7 +237,7 @@ async function loadSaved() {
       // Render from the order_data we already have — no network call, no recompute.
       // Fall back to the row's restaurant name in case order_data lacks one.
       btn.addEventListener('click', () =>
-        renderSavedOrder({ restaurant: row.restaurant, ...(row.order_data || {}) })
+        renderSavedOrder(row.id, { restaurant: row.restaurant, ...(row.order_data || {}) })
       );
       li.appendChild(btn);
       savedList.appendChild(li);

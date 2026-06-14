@@ -94,6 +94,14 @@ section { border-top: 1px solid var(--line); }
 .candidate small { display: block; color: var(--muted); margin-top: 0.15rem; font-size: 0.85rem; }
 
 #save-btn { margin-top: 1rem; }
+#delete-btn { margin-top: 1rem; margin-left: 0.5rem; }
+
+button.danger {
+  background: var(--card);
+  color: #a3361a;
+  border: 1px solid #e6c2b4;
+}
+button.danger:hover { border-color: #a3361a; }
 
 #result-subtitle { margin: 0.1rem 0 0; font-size: 0.95rem; }
 

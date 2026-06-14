@@ -116,6 +116,14 @@ export async function listOrders() {
   return rows;
 }
 
+export async function deleteOrder(id) {
+  const { rowCount } = await pool.query(
+    `DELETE FROM saved_orders WHERE id = $1`,
+    [id]
+  );
+  return rowCount > 0;
+}
+
 // --- Catalog cache reads/writes --------------------------------------------
 
 // Find-cache, two tiers: exact city-qualified key first, then a name-prefix
