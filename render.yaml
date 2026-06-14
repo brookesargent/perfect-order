@@ -1,0 +1,36 @@
+# Render Blueprint — declares BOTH the web service and the managed Postgres.
+# When you point Render at this repo as a Blueprint, it provisions everything
+# described here. Docs: https://render.com/docs/blueprint-spec
+#
+# Division of labor note: you'll still do the clicking in Render (connect repo,
+# approve the blueprint, set the ANTHROPIC_API_KEY secret, watch the logs).
+
+databases:
+  - name: perfect-order-db
+    plan: free            # Free Postgres expires ~30 days after creation — fine for learning.
+    region: oregon        # Keep this matching the web service's region for internal networking.
+    databaseName: perfect_order
+    user: perfect_order
+
+services:
+  - type: web
+    name: perfect-order
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      # DATABASE_URL is injected from the database above — you never copy/paste it.
+      # `connectionString` resolves to the INTERNAL URL (no SSL, fast private network).
+      - key: DATABASE_URL
+        fromDatabase:
+          name: perfect-order-db
+          property: connectionString
+      # sync: false means "this is a secret — don't read it from the repo."
+      # Render will prompt you to paste the real value in the dashboard.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

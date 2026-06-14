@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Perfect Order</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Perfect Order</h1>
+      <p class="tagline">Tell me where you're eating. I'll compose the ideal order.</p>
+
+      <form id="compose-form">
+        <input
+          id="restaurant"
+          name="restaurant"
+          list="restaurant-list"
+          placeholder="e.g. Skyline Chili"
+          autocomplete="off"
+          required
+        />
+        <datalist id="restaurant-list">
+          <option value="Skyline Chili"></option>
+          <option value="Graeter's"></option>
+          <option value="Chipotle"></option>
+          <option value="In-N-Out"></option>
+          <option value="Shake Shack"></option>
+          <option value="Olive Garden"></option>
+          <option value="The Cheesecake Factory"></option>
+          <option value="A neighborhood sushi bar"></option>
+        </datalist>
+        <button type="submit" id="compose-btn">Compose my order</button>
+      </form>
+
+      <section id="result" class="hidden">
+        <div id="fallback-note" class="note hidden">
+          Showing a sample order — the AI was unavailable.
+        </div>
+        <h2 id="result-title"></h2>
+
+        <h3>Must-haves</h3>
+        <ul id="must-haves"></ul>
+
+        <h3>Feeling adventurous?</h3>
+        <ul id="adventurous"></ul>
+
+        <h3>Skip</h3>
+        <ul id="skip"></ul>
+
+        <button id="save-btn">Save this order</button>
+        <span id="save-status" class="status"></span>
+      </section>
+
+      <section id="saved">
+        <h2>Saved orders</h2>
+        <ul id="saved-list"></ul>
+        <p id="saved-empty" class="muted">No saved orders yet.</p>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

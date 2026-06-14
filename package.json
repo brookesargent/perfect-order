@@ -1,0 +1,19 @@
+{
+  "name": "perfect-order",
+  "version": "1.0.0",
+  "description": "Perfect Order — an AI composes the ideal order for a restaurant. A learning prototype for Render.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --env-file=.env --watch server.js",
+    "migrate": "node migrate.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "express": "^5.2.1",
+    "pg": "^8.21.0"
+  }
+}
