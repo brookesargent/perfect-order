@@ -1,5 +1,7 @@
 import pg from 'pg';
 
+import { normalizeKey } from './shared/normalizeKey.js';
+
 const { Pool } = pg;
 
 const connectionString = process.env.DATABASE_URL;
@@ -58,24 +60,6 @@ CREATE TABLE IF NOT EXISTS restaurants (
 );
 `;
 
-// The single source of truth for the cache key — shared by reads and writes so
-// they can never disagree. Imperfect by design: collapses obvious dupes (accents,
-// punctuation, &/and, case) but won't catch name drift ("Mio's" vs "Mio's
-// Pizzeria") or inconsistent city strings. A miss just falls through to the web
-// search, so imperfect is acceptable.
-function normalizeKey(name = '', location = '') {
-  const norm = (s) =>
-    s
-      .normalize('NFKD')
-      .replace(/[̀-ͯ]/g, '')
-      .toLowerCase()
-      .replace(/&/g, 'and')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .trim();
-  const city = norm(location.split(',')[0] || location);
-  return `${norm(name)}|${city}`;
-}
-
 export async function initDb() {
   if (!pool) {
     console.warn('[db] DATABASE_URL not set — saved-orders features are disabled.');
@@ -87,6 +71,10 @@ export async function initDb() {
     // Idempotent column add for the saved-order rating (1–5, null = unrated).
     // Safe to run every boot; no separate migration step needed.
     await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS rating SMALLINT;`);
+    // Idempotent column add for the OSM identifier on ingested rows (e.g.
+    // "way/12345"). Null for organic web_search/manual rows; populated by the
+    // Workflows bulk-ingest pipeline (workflows/) as a stable external id.
+    await pool.query(`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS osm_id TEXT;`);
     ready = true;
     console.log('[db] connected; schema ready.');
     return true;

@@ -1,0 +1,17 @@
+{
+  "name": "perfect-order-workflows",
+  "version": "1.0.0",
+  "description": "Render Workflows bulk-ingest pipeline — proactively fills the restaurants catalog from OpenStreetMap (Overpass). Identity-only; orders still compose lazily.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@renderinc/sdk": "^0.6.0",
+    "pg": "^8.21.0"
+  }
+}
