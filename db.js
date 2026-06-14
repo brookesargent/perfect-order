@@ -84,6 +84,9 @@ export async function initDb() {
   try {
     await pool.query(SCHEMA);
     await pool.query(RESTAURANTS_SCHEMA);
+    // Idempotent column add for the saved-order rating (1–5, null = unrated).
+    // Safe to run every boot; no separate migration step needed.
+    await pool.query(`ALTER TABLE saved_orders ADD COLUMN IF NOT EXISTS rating SMALLINT;`);
     ready = true;
     console.log('[db] connected; schema ready.');
     return true;
@@ -108,7 +111,7 @@ export async function saveOrder(restaurant, order) {
 
 export async function listOrders() {
   const { rows } = await pool.query(
-    `SELECT id, restaurant, order_data, created_at
+    `SELECT id, restaurant, order_data, rating, created_at
        FROM saved_orders
    ORDER BY created_at DESC
       LIMIT 50`
@@ -120,6 +123,14 @@ export async function deleteOrder(id) {
   const { rowCount } = await pool.query(
     `DELETE FROM saved_orders WHERE id = $1`,
     [id]
+  );
+  return rowCount > 0;
+}
+
+export async function setOrderRating(id, rating) {
+  const { rowCount } = await pool.query(
+    `UPDATE saved_orders SET rating = $2 WHERE id = $1`,
+    [id, rating]
   );
   return rowCount > 0;
 }

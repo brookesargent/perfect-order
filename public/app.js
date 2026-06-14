@@ -1,3 +1,6 @@
+// Single swappable unit for the rating control — change this one line to reskin.
+const RATING_ICON = '🍴';
+
 const form = document.getElementById('compose-form');
 const restaurantInput = document.getElementById('restaurant');
 const findBtn = document.getElementById('find-btn');
@@ -15,6 +18,9 @@ const savedNote = document.getElementById('saved-note');
 const mustHavesEl = document.getElementById('must-haves');
 const adventurousEl = document.getElementById('adventurous');
 const skipEl = document.getElementById('skip');
+
+const ratingControl = document.getElementById('rating-control');
+const ratingUnits = document.getElementById('rating-units');
 
 const saveBtn = document.getElementById('save-btn');
 const deleteBtn = document.getElementById('delete-btn');
@@ -123,6 +129,27 @@ function renderHeader(order) {
   resultSubtitle.classList.toggle('hidden', !sub);
 }
 
+// Compact read-only rating for the saved-orders list rows. Unrated → ''.
+function ratingDisplay(rating) {
+  if (!rating) return '';
+  return RATING_ICON.repeat(rating) + ` ${rating}/5`;
+}
+
+// Build the interactive 5-unit control for the revisit view. `rating` may be
+// null (unrated → all units dimmed). Clicking unit N persists rating = N.
+function renderRatingControl(id, rating) {
+  ratingUnits.innerHTML = '';
+  for (let n = 1; n <= 5; n++) {
+    const unit = document.createElement('button');
+    unit.type = 'button';
+    unit.className = 'rating-unit' + (rating && n <= rating ? ' on' : '');
+    unit.textContent = RATING_ICON;
+    unit.setAttribute('aria-label', `${n} of 5`);
+    unit.addEventListener('click', () => rateOrder(id, n));
+    ratingUnits.appendChild(unit);
+  }
+}
+
 function renderOrder(order) {
   currentOrder = order;
   viewingSavedId = null;
@@ -139,13 +166,16 @@ function renderOrder(order) {
   saveBtn.disabled = false;
   saveBtn.textContent = 'Save this order';
   deleteBtn.classList.add('hidden');
+  // Rating only applies to saved orders — hide it in the fresh-compose view.
+  ratingControl.classList.add('hidden');
   saveStatus.textContent = '';
   result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 // Re-render an already-saved order from its stored order_data — no network call,
 // no recompute. Makes clear this is a saved view and doesn't offer to re-save.
-function renderSavedOrder(id, order) {
+// `rating` is a saved_orders column (not part of order_data); may be null.
+function renderSavedOrder(id, order, rating) {
   currentOrder = null;
   viewingSavedId = id;
   renderHeader(order);
@@ -163,6 +193,9 @@ function renderSavedOrder(id, order) {
   deleteBtn.classList.remove('hidden');
   deleteBtn.disabled = false;
   deleteBtn.textContent = 'Delete';
+  // Interactive rating reflects the current saved value (null = unrated).
+  renderRatingControl(id, rating);
+  ratingControl.classList.remove('hidden');
   saveStatus.textContent = '';
   result.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
@@ -218,30 +251,61 @@ deleteBtn.addEventListener('click', async () => {
   }
 });
 
+// Persist a rating, then update in-memory state + re-render the control and the
+// matching list row — no full refetch.
+async function rateOrder(id, rating) {
+  try {
+    const res = await fetch(`/api/orders/${id}/rating`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rating }),
+    });
+    if (!res.ok) {
+      const { error } = await res.json().catch(() => ({}));
+      saveStatus.textContent = error || 'Could not save rating.';
+      return;
+    }
+    const row = savedOrders.find((o) => o.id === id);
+    if (row) row.rating = rating;
+    // Re-render the live control (if still viewing this one) and the list row.
+    if (viewingSavedId === id) renderRatingControl(id, rating);
+    renderSavedList();
+  } catch (err) {
+    saveStatus.textContent = 'Could not save rating.';
+    console.error(err);
+  }
+}
+
+// Render the saved-orders list straight from in-memory savedOrders — no network.
+function renderSavedList() {
+  savedList.innerHTML = '';
+  savedEmpty.classList.toggle('hidden', savedOrders.length > 0);
+  for (const row of savedOrders) {
+    const li = document.createElement('li');
+    const btn = document.createElement('button');
+    btn.className = 'saved-row';
+    const when = new Date(row.created_at).toLocaleString();
+    const count = row.order_data?.must_haves?.length ?? 0;
+    const rating = ratingDisplay(row.rating);
+    btn.innerHTML =
+      `<span class="saved-restaurant">${row.restaurant}</span>` +
+      `<div class="saved-meta">${count} must-have${count === 1 ? '' : 's'} · ${when}</div>` +
+      (rating ? `<div class="saved-rating">${rating}</div>` : '');
+    // Render from the order_data we already have — no network call, no recompute.
+    // Fall back to the row's restaurant name in case order_data lacks one.
+    btn.addEventListener('click', () =>
+      renderSavedOrder(row.id, { restaurant: row.restaurant, ...(row.order_data || {}) }, row.rating)
+    );
+    li.appendChild(btn);
+    savedList.appendChild(li);
+  }
+}
+
 async function loadSaved() {
   try {
     const res = await fetch('/api/orders');
-    const orders = await res.json();
-    savedOrders = orders;
-    savedList.innerHTML = '';
-    savedEmpty.classList.toggle('hidden', orders.length > 0);
-    for (const row of orders) {
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.className = 'saved-row';
-      const when = new Date(row.created_at).toLocaleString();
-      const count = row.order_data?.must_haves?.length ?? 0;
-      btn.innerHTML =
-        `<span class="saved-restaurant">${row.restaurant}</span>` +
-        `<div class="saved-meta">${count} must-have${count === 1 ? '' : 's'} · ${when}</div>`;
-      // Render from the order_data we already have — no network call, no recompute.
-      // Fall back to the row's restaurant name in case order_data lacks one.
-      btn.addEventListener('click', () =>
-        renderSavedOrder(row.id, { restaurant: row.restaurant, ...(row.order_data || {}) })
-      );
-      li.appendChild(btn);
-      savedList.appendChild(li);
-    }
+    savedOrders = await res.json();
+    renderSavedList();
   } catch (err) {
     console.error('Could not load saved orders', err);
   }

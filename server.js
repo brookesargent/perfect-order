@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 import {
-  initDb, isDbReady, saveOrder, listOrders, deleteOrder,
+  initDb, isDbReady, saveOrder, listOrders, deleteOrder, setOrderRating,
   findCachedCandidates, getCachedOrder, upsertRestaurant, upsertOrder,
 } from './db.js';
 import { composeOrder, findRestaurants } from './llm.js';
@@ -125,6 +125,23 @@ app.delete('/api/orders/:id', async (req, res) => {
   } catch (err) {
     console.error('[api] delete failed:', err.message);
     res.status(500).json({ error: 'Could not delete order' });
+  }
+});
+
+// Rate a saved order 1–5. 204 on success, 404 if no such order.
+app.patch('/api/orders/:id/rating', async (req, res) => {
+  if (!isDbReady()) return res.status(503).json({ error: 'Database not available yet' });
+  const { rating } = req.body || {};
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return res.status(400).json({ error: 'rating must be an integer from 1 to 5' });
+  }
+  try {
+    const updated = await setOrderRating(req.params.id, rating);
+    if (!updated) return res.status(404).json({ error: 'Order not found' });
+    res.status(204).end();
+  } catch (err) {
+    console.error('[api] rating failed:', err.message);
+    res.status(500).json({ error: 'Could not rate order' });
   }
 });
 
