@@ -67,6 +67,19 @@ let viewingSavedId = null;
 let currentUser = null;
 const isLoggedIn = () => currentUser != null;
 
+// fetch() with a hard client-side timeout so a slow/cold backend never leaves
+// the user staring at a spinner for minutes. Aborts after `ms`; the caller's
+// catch sees an AbortError and shows a graceful "try again" message.
+async function fetchWithTimeout(url, options = {}, ms = 45000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- Step 1: find + confirm ------------------------------------------------
 
 form.addEventListener('submit', async (e) => {
@@ -80,16 +93,18 @@ form.addEventListener('submit', async (e) => {
   findStatus.textContent = 'Searching for the restaurant…';
 
   try {
-    const res = await fetch('/api/find', {
+    const res = await fetchWithTimeout('/api/find', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query }),
-    });
+    }, 20000);
     const { candidates } = await res.json();
     renderCandidates(candidates || []);
     findStatus.textContent = '';
   } catch (err) {
-    findStatus.textContent = 'Search failed. Try again.';
+    findStatus.textContent = err.name === 'AbortError'
+      ? 'Search took too long — the app may be waking up. Try again.'
+      : 'Search failed. Try again.';
     console.error(err);
   } finally {
     findBtn.disabled = false;
@@ -126,16 +141,18 @@ async function chooseCandidate(candidate) {
     : 'Composing your order — reading the menu (this can take ~30–45s)…';
 
   try {
-    const res = await fetch('/api/generate', {
+    const res = await fetchWithTimeout('/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ restaurant: candidate }),
-    });
+    }, 45000);
     const order = await res.json();
     renderOrder(order);
     findStatus.textContent = '';
   } catch (err) {
-    findStatus.textContent = 'Could not compose an order. Try again.';
+    findStatus.textContent = err.name === 'AbortError'
+      ? 'Taking longer than usual — the free instance may be waking up. Try again (popular spots are cached and instant).'
+      : 'Could not compose an order. Try again.';
     console.error(err);
   }
 }

@@ -117,7 +117,9 @@ Respond with ONLY a JSON object, no prose:
   try {
     const resp = await client.messages.create(
       { model: MODEL, max_tokens: 1500, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
-      { timeout: 60000 }
+      // Bounded so the server returns (real or fallback) before the client's
+      // 45s abort and well under any proxy timeout — no multi-minute hangs.
+      { timeout: 40000 }
     );
     const order = extractJson(collectText(resp.content));
     if (!order || !Array.isArray(order.must_haves) || !order.adventurous || !Array.isArray(order.skip)) {
