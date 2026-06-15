@@ -112,6 +112,7 @@ app.get('/auth/logout', async (req, res) => {
 // few candidates for the user to confirm (solves "which Mio's did you mean?").
 app.post('/api/find', async (req, res) => {
   const query = (req.body?.query || '').trim();
+  const useDeep = req.body?.deep === true;
   if (!query) return res.status(400).json({ error: 'query is required' });
 
   // Read-through: try the catalog first. A cache hit skips the ~50s web search.
@@ -125,7 +126,7 @@ app.post('/api/find', async (req, res) => {
     }
   }
 
-  const candidates = await findRestaurants(query);
+  const candidates = await findRestaurants(query, { deep: useDeep });
 
   // Backfill the catalog with what we found (only grounded, real matches — not
   // the bare-query fallback). Fire-and-forget: we still return the candidates.

@@ -134,11 +134,9 @@ function renderCandidates(candidates) {
 
 async function chooseCandidate(candidate) {
   confirmSection.classList.add('hidden');
-  // Grounded candidates come from the catalog and compose from cache (instant),
-  // so skip the long-wait status for them. Anything else means a web search.
-  findStatus.textContent = candidate.grounded
-    ? 'Pulling your order from the catalog…'
-    : 'Composing your order — reading the menu (this can take ~30–45s)…';
+  // Compose is fast now (model-knowledge, no per-request web search), and popular
+  // spots are pre-cached, so this resolves in a few seconds either way.
+  findStatus.textContent = 'Composing your order…';
 
   try {
     const res = await fetchWithTimeout('/api/generate', {

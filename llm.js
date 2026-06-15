@@ -64,21 +64,26 @@ function fallbackOrder(displayName, location = '', cuisine = '') {
 
 // --- Step 1: find + disambiguate -------------------------------------------
 
-export async function findRestaurants(query) {
+export async function findRestaurants(query, { deep = false } = {}) {
   if (!client) return fallbackCandidates(query);
 
-  const prompt = `The user typed this restaurant name: "${query}".
-Use web search to identify up to 3 real, specific restaurants that best match it. If the query names a city or area, prioritize matches there; otherwise prefer the most likely / well-known matches.
+  // Same fast/deep split as composeOrder: the live path resolves from the
+  // model's own knowledge (no tools, ~5s) so an obscure name never hangs the
+  // confirm step; deep adds web search for the background pre-warm.
+  const lead = deep
+    ? `Use web search to identify up to 3 real, specific restaurants that best match the name the user typed: "${query}".`
+    : `From what you already know, identify up to 3 real, specific restaurants that best match the name the user typed: "${query}". If you don't recognize the name, return exactly ONE candidate using the name as given with empty location and cuisine — do NOT invent a restaurant.`;
+  const prompt = `${lead}
+If the query names a city or area, prioritize matches there; otherwise prefer the most likely / well-known matches.
 For each, provide: name, location (city + neighborhood if known), and cuisine.
 Respond with ONLY a JSON object, no prose:
-{"candidates":[{"name":"...","location":"...","cuisine":"..."}]}
-If you genuinely cannot find a match, return one candidate using the name as given with empty location and cuisine.`;
+{"candidates":[{"name":"...","location":"...","cuisine":"..."}]}`;
+
+  const params = { model: MODEL, max_tokens: 1024, messages: [{ role: 'user', content: prompt }] };
+  if (deep) params.tools = [WEB_SEARCH];
 
   try {
-    const resp = await client.messages.create(
-      { model: MODEL, max_tokens: 1024, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
-      { timeout: 30000 }
-    );
+    const resp = await client.messages.create(params, { timeout: deep ? 20000 : 12000 });
     const data = extractJson(collectText(resp.content));
     const candidates = data?.candidates;
     if (!Array.isArray(candidates) || candidates.length === 0) return fallbackCandidates(query);
