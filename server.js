@@ -290,9 +290,24 @@ app.delete('/api/orders/:id', requireAuth, async (req, res) => {
 // (Binding only to localhost is a classic "deploy succeeds but health check fails" trap.)
 const PORT = process.env.PORT || 3000;
 
+// Optional keep-warm: free instances spin down after ~15 min idle, and the
+// cold start (~50-80s) is what makes a first compose feel like it hangs. When
+// KEEP_WARM is set we self-ping our own public URL just under that window so
+// the instance stays awake. OFF by default — a 24/7 ping burns the free tier's
+// 750 instance-hours/month, so flip it on only around demos (or move to a paid
+// instance, which removes spin-down entirely).
+function startKeepWarm() {
+  const url = process.env.RENDER_EXTERNAL_URL;
+  if (!process.env.KEEP_WARM || !url) return;
+  const ping = () => fetch(`${url}/healthz`).catch(() => {});
+  setInterval(ping, 10 * 60 * 1000);
+  console.log(`[server] keep-warm enabled — pinging ${url}/healthz every 10m`);
+}
+
 // Try to set up the DB, then start listening regardless of the outcome.
 initDb().finally(() => {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[server] listening on http://0.0.0.0:${PORT}`);
+    startKeepWarm();
   });
 });

@@ -145,7 +145,7 @@ async function chooseCandidate(candidate) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ restaurant: candidate }),
-    }, 45000);
+    }, 60000);
     const order = await res.json();
     renderOrder(order);
     findStatus.textContent = '';

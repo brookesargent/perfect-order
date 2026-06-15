@@ -117,9 +117,11 @@ Respond with ONLY a JSON object, no prose:
   try {
     const resp = await client.messages.create(
       { model: MODEL, max_tokens: 1500, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
-      // Bounded so the server returns (real or fallback) before the client's
-      // 45s abort and well under any proxy timeout — no multi-minute hangs.
-      { timeout: 40000 }
+      // 55s: real web-search composes need ~45-50s, so a tighter cap was
+      // falling back to the generic sample. The client abort (60s) sits just
+      // above this. Cold start can still exceed it — the durable fix is a
+      // background menu-backfill workflow (no user waiting), not a bigger cap.
+      { timeout: 55000 }
     );
     const order = extractJson(collectText(resp.content));
     if (!order || !Array.isArray(order.must_haves) || !order.adventurous || !Array.isArray(order.skip)) {
