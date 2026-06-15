@@ -143,14 +143,17 @@ app.post('/api/find', async (req, res) => {
 // menu via web search. Does NOT save. `restaurant` is the confirmed candidate
 // object ({name, location, cuisine}); a bare string is also accepted.
 app.post('/api/generate', async (req, res) => {
-  const { restaurant } = req.body || {};
+  const { restaurant, deep } = req.body || {};
+  const useDeep = deep === true;
   const r = typeof restaurant === 'string' ? { name: restaurant.trim() } : (restaurant || {});
   const name = (r.name || '').trim();
   if (!name) return res.status(400).json({ error: 'restaurant is required' });
 
   // Read-through: serve a cached order if we have a fresh one. The cached blob
   // already carries restaurant/location/cuisine, so a hit is fully self-contained.
-  if (isDbReady()) {
+  // Deep requests (pre-warm/backfill) skip the cache so they always (re)compose a
+  // real web-searched menu and overwrite any quick fast-mode entry.
+  if (isDbReady() && !useDeep) {
     try {
       const cached = await getCachedOrder(name, r.location, CACHE_TTL_DAYS);
       if (cached) return res.json({ ...cached, source: 'cache' });
@@ -159,17 +162,17 @@ app.post('/api/generate', async (req, res) => {
     }
   }
 
-  const order = await composeOrder(restaurant);
+  const order = await composeOrder(restaurant, { deep: useDeep });
 
   // Write-through: cache the composed order (also refreshes stale entries, since
   // upsertOrder overwrites order_data + last_composed_at). Never cache fallbacks
   // — they're canned placeholders, not a real grounded menu.
   if (isDbReady() && !order.fallback) {
-    upsertOrder(name, r.location, r.cuisine, order, 'web_search')
+    upsertOrder(name, r.location, r.cuisine, order, useDeep ? 'web_search' : 'fast')
       .catch((err) => console.error('[cache] order upsert failed:', err.message));
   }
 
-  res.json({ ...order, source: 'web_search' });
+  res.json({ ...order, source: useDeep ? 'web_search' : 'fast' });
 });
 
 // --- Orders (Phase 2: per-user log). Every endpoint requires a logged-in user

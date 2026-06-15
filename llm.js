@@ -96,7 +96,7 @@ If you genuinely cannot find a match, return one candidate using the name as giv
 
 // --- Step 2: compose the order, grounded in the confirmed restaurant -------
 
-export async function composeOrder(restaurant) {
+export async function composeOrder(restaurant, { deep = false } = {}) {
   const r = typeof restaurant === 'string' ? { name: restaurant } : restaurant || {};
   const displayName = r.location ? `${r.name} (${r.location})` : r.name || 'this restaurant';
   const location = r.location || '';
@@ -104,25 +104,32 @@ export async function composeOrder(restaurant) {
 
   if (!client) return fallbackOrder(displayName, location, cuisine);
 
-  const prompt = `Use web search to find the actual current menu of this restaurant:
-- name: ${r.name}
-${r.location ? `- location: ${r.location}\n` : ''}${r.cuisine ? `- cuisine: ${r.cuisine}\n` : ''}Based on its REAL menu items, compose the perfect order:
+  // Two modes for the same JSON contract:
+  //  - fast (default): compose from the model's own knowledge, NO tools → ~5-10s.
+  //    Snappy enough for a live request; great for well-known spots.
+  //  - deep: ground in the real menu via web search (~45-55s). Used by the
+  //    background pre-warm/backfill, where no user is waiting, so curated spots
+  //    cache an accurate menu. The user-facing path never pays the web-search tax.
+  const identity = `- name: ${r.name}
+${r.location ? `- location: ${r.location}\n` : ''}${r.cuisine ? `- cuisine: ${r.cuisine}\n` : ''}`;
+  const lead = deep
+    ? `Use web search to find the actual current menu of this restaurant:\n${identity}Based on its REAL menu items, compose the perfect order:`
+    : `Compose the perfect order for this restaurant from what you know of its menu:\n${identity}Use real, specific dish names from this restaurant's known menu. If unsure of the exact spot, use the most likely menu for a place of this name/cuisine.`;
+  const prompt = `${lead}
 - must_haves: 2-4 specific dishes a first-timer should get, each with a one-line why tied to this restaurant.
 - adventurous: ONE bolder real menu item, with a why.
 - skip: 1-3 real menu items that are overrated or not worth it, with a why.
-Use actual dish names from the menu wherever you can find them. Keep each "why" to one short sentence.
+Keep each "why" to one short sentence.
 Respond with ONLY a JSON object, no prose:
 {"restaurant":"...","must_haves":[{"item":"...","why":"..."}],"adventurous":{"item":"...","why":"..."},"skip":[{"item":"...","why":"..."}]}`;
 
+  const params = { model: MODEL, max_tokens: 1500, messages: [{ role: 'user', content: prompt }] };
+  if (deep) params.tools = [WEB_SEARCH];
+
   try {
-    const resp = await client.messages.create(
-      { model: MODEL, max_tokens: 1500, tools: [WEB_SEARCH], messages: [{ role: 'user', content: prompt }] },
-      // 55s: real web-search composes need ~45-50s, so a tighter cap was
-      // falling back to the generic sample. The client abort (60s) sits just
-      // above this. Cold start can still exceed it — the durable fix is a
-      // background menu-backfill workflow (no user waiting), not a bigger cap.
-      { timeout: 55000 }
-    );
+    // Fast mode returns in seconds; deep mode is bounded at 55s (real composes
+    // need ~45-50s) so it returns a result rather than hanging indefinitely.
+    const resp = await client.messages.create(params, { timeout: deep ? 55000 : 22000 });
     const order = extractJson(collectText(resp.content));
     if (!order || !Array.isArray(order.must_haves) || !order.adventurous || !Array.isArray(order.skip)) {
       return fallbackOrder(displayName, location, cuisine);
